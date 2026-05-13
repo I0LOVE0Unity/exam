@@ -1,0 +1,5 @@
+pip install pillow
+pip install pyodbc
+pip install pyodbc pillow
+PySide6 Pyside6-Essentials PySide6-Addons
+python 3 14

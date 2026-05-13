@@ -1,0 +1,482 @@
+создаю main.py
+import pyodbc
+import tkinter as tk
+from tkinter import messagebox, ttk, filedialog
+from PIL import Image, ImageTk
+import os
+
+# =============================
+# ПОДКЛЮЧЕНИЕ К MICROSOFT SQL SERVER
+# =============================
+# Автоматически найдём подходящий ODBC-драйвер
+AVAILABLE = [d for d in pyodbc.drivers() if "SQL Server" in d]
+if not AVAILABLE:
+    messagebox.showerror("Ошибка", "Установите ODBC Driver for SQL Server с официального сайта Microsoft.")
+    exit()
+
+# Подключаемся к базе данных
+try:
+    conn = pyodbc.connect(
+        f"Driver={{{AVAILABLE[-1]}}};"
+        "Server=ILABSQLW19S1,49172;"  # ← ЗАМЕНИ НА СВОЙ СЕРВЕР, ЕСЛИ НУЖНО (например, localhost)
+        "Database=MagazNeObyvi;"
+        "Trusted_Connection=yes;"
+        "Encrypt=no;"
+    )
+    cursor = conn.cursor()
+except Exception as e:
+    messagebox.showerror("Ошибка подключения", f"Не удалось подключиться к SQL Server:\n{e}\n\nУбедитесь, что сервер доступен и база данных существует.")
+    exit()
+
+# =============================
+# АВТОМАТИЧЕСКОЕ СОЗДАНИЕ ТАБЛИЦ (если их нет)
+# =============================
+# Создаём таблицу Users
+cursor.execute("""
+IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='Users' AND xtype='U')
+CREATE TABLE Users(
+   Id INT IDENTITY(1,1) PRIMARY KEY,
+   Login NVARCHAR(50),
+   Password NVARCHAR(50),
+   Role NVARCHAR(20),
+   FIO NVARCHAR(100)
+)
+""")
+
+# Создаём таблицу Products
+cursor.execute("""
+IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='Products' AND xtype='U')
+CREATE TABLE Products(
+   Id INT IDENTITY(1,1) PRIMARY KEY,
+   Name NVARCHAR(100),
+   Category NVARCHAR(50),
+   Description NVARCHAR(500),
+   Manufacturer NVARCHAR(50),
+   Supplier NVARCHAR(50),
+   Price FLOAT,
+   Quantity INT,
+   Discount INT,
+   ImagePath NVARCHAR(255)
+)
+""")
+
+# Добавляем недостающие столбцы (на случай обновления структуры)
+for col, typ in [('Description', 'NVARCHAR(500)'), ('Manufacturer', 'NVARCHAR(50)'), ('Supplier', 'NVARCHAR(50)'), ('ImagePath', 'NVARCHAR(255)')]:
+    cursor.execute(f"IF NOT EXISTS (SELECT * FROM sys.columns WHERE object_id = OBJECT_ID('Products') AND name = '{col}') ALTER TABLE Products ADD {col} {typ}")
+
+conn.commit()
+
+# =============================
+# АВТОМАТИЧЕСКИЙ АДМИН (если его нет)
+# =============================
+cursor.execute("SELECT 1 FROM Users WHERE Login='admin'")
+if not cursor.fetchone():
+    cursor.execute("INSERT INTO Users (Login, Password, Role, FIO) VALUES ('admin', 'admin', 'admin', 'Администратор')")
+    conn.commit()
+
+# =============================
+# ГЛОБАЛЬНЫЕ НАСТРОЙКИ
+# =============================
+user = None
+FONT = ("Times New Roman", 12)
+FONT_BOLD = ("Times New Roman", 12, "bold")
+FONT_TITLE = ("Times New Roman", 18, "bold")
+
+def clear():
+    for w in root.winfo_children():
+        w.destroy()
+
+def calc(price, discount):
+    return int(price * (100 - discount) / 100) if discount > 0 else int(price)
+
+def placeholder(entry, text):
+    entry.insert(0, text)
+    entry.config(fg="gray", font=FONT)
+    def focus_in(e):
+        if entry.get() == text:
+            entry.delete(0, "end")
+            entry.config(fg="black")
+    def focus_out(e):
+        if not entry.get():
+            entry.insert(0, text)
+            entry.config(fg="gray")
+    entry.bind("<FocusIn>", focus_in)
+    entry.bind("<FocusOut>", focus_out)
+
+# =============================
+# ОКНО ВХОДА
+# =============================
+def login_win():
+    global user
+    user = None
+    clear()
+    root.geometry("400x500")
+    root.configure(bg="#FFFFFF")
+
+    header = tk.Frame(root, bg="#7FFF00", height=100)
+    header.pack(fill="x")
+    header.pack_propagate(False)
+    tk.Label(header, text="Магазин НеОбуви", font=FONT_TITLE, bg="#7FFF00").pack(pady=30)
+
+    frame = tk.Frame(root, bg="#FFFFFF")
+    frame.pack(expand=True)
+
+    login_e = tk.Entry(frame, width=30, font=FONT, justify="center")
+    pass_e = tk.Entry(frame, width=30, font=FONT, justify="center", show="*")
+    placeholder(login_e, "Логин")
+    placeholder(pass_e, "Пароль")
+    login_e.pack(pady=15)
+    pass_e.pack(pady=15)
+
+    def do_login():
+        global user
+        cursor.execute("SELECT Id, FIO, Role FROM Users WHERE Login=? AND Password=?", (login_e.get(), pass_e.get()))
+        row = cursor.fetchone()
+        if row:
+            user = {"id": row[0], "fio": row[1], "role": row[2]}
+            open_shop()
+        else:
+            messagebox.showerror("Ошибка", "Неверный логин или пароль")
+
+    btn_frame = tk.Frame(frame, bg="#FFFFFF")
+    btn_frame.pack(pady=25)
+
+    tk.Button(btn_frame, text="Войти", width=12, height=2, command=do_login,
+              bg="#00FA9A", fg="black", font=FONT_BOLD).pack(side="left", padx=10)
+    tk.Button(btn_frame, text="Вход для гостя", width=12, height=2,
+              command=lambda: open_shop(guest=True), bg="#FFFFFF", fg="black", font=FONT).pack(side="left", padx=10)
+    tk.Button(btn_frame, text="Выход", width=12, height=2, command=root.quit,
+              bg="#FFFFFF", fg="black", font=FONT).pack(side="left", padx=10)
+
+# =============================
+# ФОРМА ТОВАРА (добавление/редактирование)
+# =============================
+def product_form(title, prod_id=None, data=None):
+    clear()
+    root.geometry("1100x750")
+    root.configure(bg="#FFFFFF")
+
+    header = tk.Frame(root, bg="#7FFF00", height=80)
+    header.pack(fill="x")
+    header.pack_propagate(False)
+    tk.Label(header, text=title, font=FONT_TITLE, bg="#7FFF00").pack(pady=20)
+
+    toolbar = tk.Frame(root, bg="#FFFFFF", height=50)
+    toolbar.pack(fill="x", pady=5)
+    toolbar.pack_propagate(False)
+
+    btn_frame = tk.Frame(toolbar, bg="#FFFFFF")
+    btn_frame.pack(side="right", padx=20)
+
+    img_path = [data[8] if data and len(data) > 8 else None]
+
+    def save():
+        try:
+            name = name_e.get().strip()
+            cat = cat_e.get().strip()
+            desc = desc_e.get("1.0", "end").strip()
+            man = man_e.get().strip()
+            sup = sup_e.get().strip()
+            price = float(price_e.get() or 0)
+            qty = int(qty_e.get() or 0)
+            disc = int(disc_e.get() or 0)
+            if not name or not cat or price < 0 or qty < 0 or disc < 0 or disc > 99:
+                raise ValueError
+        except ValueError:
+            messagebox.showerror("Ошибка", "Проверьте корректность данных (скидка 0–99%, цена/кол-во ≥ 0, поля заполнены)")
+            return
+
+        params = (name, cat, desc, man, sup, price, qty, disc, img_path[0])
+        if prod_id:
+            cursor.execute("UPDATE Products SET Name=?, Category=?, Description=?, Manufacturer=?, Supplier=?, Price=?, Quantity=?, Discount=?, ImagePath=? WHERE Id=?", params + (prod_id,))
+        else:
+            cursor.execute("INSERT INTO Products (Name, Category, Description, Manufacturer, Supplier, Price, Quantity, Discount, ImagePath) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", params)
+        conn.commit()
+
+        message = "Товар сохранён"
+        if qty == 0:
+            message += "\n(но нет в наличии, т.к. количество = 0)"
+        messagebox.showinfo("Успех", message)
+        open_shop()
+
+    tk.Button(btn_frame, text="Сохранить", command=save, bg="#00FA9A", fg="black", font=FONT_BOLD, width=15).pack(side="left", padx=10)
+    tk.Button(btn_frame, text="Назад", command=open_shop, bg="#FFFFFF", fg="black", font=FONT_BOLD, width=15).pack(side="left")
+
+    canvas_frame = tk.Frame(root, bg="#FFFFFF")
+    canvas_frame.pack(fill="both", expand=True, padx=30, pady=10)
+
+    canvas = tk.Canvas(canvas_frame, bg="#FFFFFF", highlightthickness=0)
+    scroll = ttk.Scrollbar(canvas_frame, orient="vertical", command=canvas.yview)
+    inner = tk.Frame(canvas, bg="#FFFFFF")
+    canvas.create_window((0, 0), window=inner, anchor="nw")
+    canvas.configure(yscrollcommand=scroll.set)
+    inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+
+    def on_mousewheel(e):
+        canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
+
+    canvas.bind("<Enter>", lambda e: root.bind_all("<MouseWheel>", on_mousewheel))
+    canvas.bind("<Leave>", lambda e: root.unbind_all("<MouseWheel>"))
+
+    canvas.pack(side="left", fill="both", expand=True)
+    scroll.pack(side="right", fill="y")
+
+    left = tk.Frame(inner, bg="#FFFFFF")
+    left.pack(side="left", padx=20)
+
+    photo_label = tk.Label(left, text="Нет фото", font=FONT_BOLD, fg="gray", bg="#FFFFFF", width=30, height=15, relief="sunken")
+    photo_label.pack(pady=10)
+
+    if img_path[0] and os.path.exists(img_path[0]):
+        try:
+            img = Image.open(img_path[0])
+            img.thumbnail((250, 250), Image.Resampling.LANCZOS)
+            photo = ImageTk.PhotoImage(img)
+            photo_label.config(image=photo, text="")
+            photo_label.image = photo
+        except:
+            pass
+
+    def load_image():
+        file = filedialog.askopenfilename(filetypes=[("Изображения", "*.jpg *.jpeg *.png *.bmp")])
+        if file:
+            img_path[0] = file
+            try:
+                img = Image.open(file)
+                img.thumbnail((250, 250), Image.Resampling.LANCZOS)
+                photo = ImageTk.PhotoImage(img)
+                photo_label.config(image=photo, text="")
+                photo_label.image = photo
+            except:
+                messagebox.showerror("Ошибка", "Не удалось загрузить изображение")
+
+    tk.Button(left, text="Загрузить фото", command=load_image,
+              bg="#00FA9A", fg="black", font=FONT_BOLD, width=20).pack(pady=10)
+
+    right = tk.Frame(inner, bg="#FFFFFF")
+    right.pack(side="left", fill="both", expand=True)
+
+    labels = ["Наименование:", "Категория:", "Описание:", "Производитель:", "Поставщик:", "Цена:", "Количество:", "Скидка (%):"]
+    entries = []
+
+    for i, lab_text in enumerate(labels):
+        tk.Label(right, text=lab_text, font=FONT_BOLD, bg="#FFFFFF", anchor="w").pack(anchor="w", pady=(15, 2))
+        if i == 2:
+            e = tk.Text(right, height=8, width=70, font=FONT, wrap="word")
+            e.pack(pady=(0, 15))
+        else:
+            e = tk.Entry(right, width=60, font=FONT)
+            e.pack(pady=(0, 15))
+        entries.append(e)
+
+    name_e, cat_e, desc_e, man_e, sup_e, price_e, qty_e, disc_e = entries
+
+    defaults = data if data else ("", "", "", "", "", 0.0, 0, 0, None)
+    name_e.insert(0, defaults[0])
+    cat_e.insert(0, defaults[1])
+    if defaults[2]:
+        desc_e.insert("1.0", defaults[2])
+    man_e.insert(0, defaults[3])
+    sup_e.insert(0, defaults[4])
+    price_e.insert(0, str(defaults[5]))
+    qty_e.insert(0, str(defaults[6]))
+    disc_e.insert(0, str(defaults[7]))
+
+    for e, ph in zip([name_e, cat_e, man_e, sup_e],
+                     ["Наименование", "Категория", "Производитель", "Поставщик"]):
+        if ph:
+            placeholder(e, ph)
+
+# =============================
+# КАТАЛОГ ТОВАРОВ
+# =============================
+def open_shop(search="", cat="Все категории", guest=False):
+    role = "guest" if guest else (user["role"] if user else "guest")
+    clear()
+    root.geometry("1200x800")
+    root.configure(bg="#FFFFFF")
+
+    header = tk.Frame(root, bg="#7FFF00", height=120)
+    header.pack(fill="x")
+    header.pack_propagate(False)
+
+    logo_label = tk.Label(header, bg="#7FFF00")
+    logo_label.place(x=30, y=30)
+    try:
+        logo_img = Image.open("logo.png")
+        logo_img.thumbnail((150, 100), Image.Resampling.LANCZOS)
+        logo_photo = ImageTk.PhotoImage(logo_img)
+        logo_label.config(image=logo_photo)
+        logo_label.image = logo_photo
+    except:
+        logo_label.config(text="НеОбувь\nShop", font=("Times New Roman", 24, "bold"), bg="#7FFF00", fg="#FFFFFF")
+
+    tk.Label(header, text="Магазин НеОбуви — Каталог товаров", font=FONT_TITLE, bg="#7FFF00").place(x=200, y=40)
+    tk.Label(header, text=f"Роль: {role.upper()}", font=FONT_BOLD, bg="#7FFF00").place(relx=1.0, y=10, anchor="ne", x=-20)
+
+    search_frame = tk.Frame(root, bg="#FFFFFF")
+    search_frame.pack(fill="x", padx=30, pady=10)
+    tk.Label(search_frame, text="Поиск:", font=FONT_BOLD, bg="#FFFFFF").pack(side="left")
+    search_e = tk.Entry(search_frame, width=50, font=FONT)
+    search_e.pack(side="left", padx=10)
+    search_e.insert(0, search)
+
+    cursor.execute("SELECT DISTINCT Category FROM Products WHERE Category IS NOT NULL ORDER BY Category")
+    cats = ["Все категории"] + [r[0] for r in cursor.fetchall()]
+    combo = ttk.Combobox(search_frame, values=cats, state="readonly", width=30, font=FONT)
+    combo.pack(side="left", padx=10)
+    combo.set(cat)
+
+    def refresh():
+        open_shop(search_e.get().strip().lower(), combo.get(), guest)
+
+    search_e.bind("<KeyRelease>", lambda e: refresh())
+    combo.bind("<<ComboboxSelected>>", lambda e: refresh())
+
+    canvas_frame = tk.Frame(root, bg="#FFFFFF")
+    canvas_frame.pack(fill="both", expand=True, padx=30, pady=10)
+
+    canvas = tk.Canvas(canvas_frame, bg="#FFFFFF", highlightthickness=0)
+    scroll = ttk.Scrollbar(canvas_frame, orient="vertical", command=canvas.yview)
+    inner = tk.Frame(canvas, bg="#FFFFFF")
+    canvas.create_window((0, 0), window=inner, anchor="nw")
+    canvas.configure(yscrollcommand=scroll.set)
+    inner.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+
+    def on_mousewheel(e):
+        canvas.yview_scroll(int(-1 * (e.delta / 120)), "units")
+
+    canvas.bind("<Enter>", lambda e: root.bind_all("<MouseWheel>", on_mousewheel))
+    canvas.bind("<Leave>", lambda e: root.unbind_all("<MouseWheel>"))
+
+    canvas.pack(side="left", fill="both", expand=True)
+    scroll.pack(side="right", fill="y")
+
+    query = "SELECT Id, Name, Category, Description, Manufacturer, Supplier, Price, Quantity, Discount, ImagePath FROM Products WHERE 1=1"
+    params = []
+    if search:
+        query += " AND LOWER(Name) LIKE ?"
+        params.append(f"%{search}%")
+    if cat != "Все категории":
+        query += " AND Category = ?"
+        params.append(cat)
+    cursor.execute(query, params)
+    rows = cursor.fetchall()
+
+    photos = []
+
+    def add_to_order(pid, qty):
+        if qty <= 0:
+            messagebox.showerror("Ошибка", "Нет в наличии")
+            return
+        messagebox.showinfo("Заказ", "Товар добавлен в заказ")
+
+    if not rows:
+        tk.Label(inner, text="Товары не найдены", font=FONT_TITLE, bg="#FFFFFF").pack(pady=100)
+
+    for row in rows:
+        pid, name, category, desc, man, sup, price, qty, disc, img_path = row
+        name = name or "Без названия"
+        category = category or "Без категории"
+        desc = desc or ""
+        price = float(price or 0)
+        qty = qty or 0
+        disc = disc or 0
+
+        is_big_discount = disc > 15
+        card_bg = "#2E8B57" if is_big_discount else "#FFFFFF"
+        text_fg = "white" if is_big_discount else "black"
+        secondary_fg = "lightgray" if is_big_discount else "gray"
+        stock_fg = "lightgreen" if qty > 0 else "lightcoral" if is_big_discount else ("green" if qty > 0 else "red")
+
+        card = tk.Frame(inner, bg=card_bg, relief="solid", bd=1, pady=15, padx=15,
+                        highlightbackground="#7FFF00" if not is_big_discount else "#1E5D3D",
+                        highlightthickness=2)
+        card.pack(fill="x", expand=True, pady=12, padx=10)
+
+        photo_fr = tk.Frame(card, width=180, height=220, bg="#f8f8f8" if not is_big_discount else "#3A9D6B")
+        photo_fr.pack(side="left", padx=15)
+        photo_fr.pack_propagate(False)
+
+        if img_path and os.path.exists(img_path):
+            try:
+                img = Image.open(img_path)
+                img.thumbnail((160, 200), Image.Resampling.LANCZOS)
+                photo = ImageTk.PhotoImage(img)
+                photos.append(photo)
+                tk.Label(photo_fr, image=photo, bg=photo_fr["bg"]).pack(expand=True)
+            except:
+                tk.Label(photo_fr, text="Нет фото", font=FONT_BOLD, fg=secondary_fg, bg=photo_fr["bg"]).pack(expand=True)
+        else:
+            tk.Label(photo_fr, text="Нет фото", font=FONT_BOLD, fg=secondary_fg, bg=photo_fr["bg"]).pack(expand=True)
+
+        info = tk.Frame(card, bg=card_bg)
+        info.pack(side="left", fill="both", expand=True, padx=15)
+
+        tk.Label(info, text=name, font=("Times New Roman", 16, "bold"), bg=card_bg, fg=text_fg, anchor="w").pack(anchor="w")
+        tk.Label(info, text=f"Категория: {category}", font=FONT, bg=card_bg, fg=text_fg, anchor="w").pack(anchor="w", pady=(0, 8))
+
+        if desc:
+            short_desc = desc[:200] + ("..." if len(desc) > 200 else "")
+            tk.Label(info, text=short_desc, font=FONT, bg=card_bg, fg=text_fg, anchor="w", wraplength=600, justify="left").pack(anchor="w", pady=(0, 10))
+
+        price_fr = tk.Frame(info, bg=card_bg)
+        price_fr.pack(anchor="w")
+        if disc > 0:
+            old_price_label = tk.Label(price_fr, text=f"{price:.2f} ₽", font=FONT, fg=secondary_fg, bg=card_bg)
+            old_price_label.pack(side="left")
+            old_price_label.config(font=(FONT[0], FONT[1], "overstrike"))
+            tk.Label(price_fr, text=f" {calc(price, disc)} ₽", font=("Times New Roman", 20, "bold"),
+                     fg="red", bg=card_bg).pack(side="left", padx=(15, 0))
+        else:
+            tk.Label(price_fr, text=f"{price:.2f} ₽", font=("Times New Roman", 20, "bold"),
+                     fg=text_fg, bg=card_bg).pack(anchor="w")
+
+        tk.Label(info, text=f"В наличии: {qty} шт.", font=FONT_BOLD,
+                 fg=stock_fg, bg=card_bg).pack(anchor="w", pady=(10, 0))
+
+        if role == "client":
+            tk.Button(info, text="Добавить в заказ", bg="#00FA9A", fg="black", font=FONT_BOLD,
+                      command=lambda p=pid, q=qty: add_to_order(p, q)).pack(pady=12)
+
+        disc_bg = "#2E8B57" if is_big_discount else ("#228B22" if disc > 0 else "#f0f0f0")
+        disc_fg = "white" if disc > 0 else "gray"
+
+        disc_fr = tk.Frame(card, width=120, bg=disc_bg)
+        disc_fr.pack(side="right", padx=20, fill="y")
+        disc_fr.pack_propagate(False)
+
+        if disc > 0:
+            tk.Label(disc_fr, text=f"-{disc}%", font=("Times New Roman", 28, "bold"),
+                     fg=disc_fg, bg=disc_bg).pack(expand=True)
+        else:
+            tk.Label(disc_fr, text="Без\nскидки", font=FONT, fg="gray", bg=disc_bg).pack(expand=True)
+
+        if role in ["admin", "manager"]:
+            data_tuple = (name, category, desc, man, sup, price, qty, disc, img_path)
+            def edit(e, id=pid, dt=data_tuple):
+                product_form("Редактировать товар", id, dt)
+            card.bind("<Double-Button-1>", edit)
+            for child in card.winfo_children():
+                child.bind("<Double-Button-1>", edit)
+
+    bottom = tk.Frame(root, bg="#FFFFFF")
+    bottom.pack(fill="x", pady=20)
+    if role in ["admin"]:
+        tk.Button(bottom, text="Добавить товар", command=lambda: product_form("Добавить новый товар"),
+                  bg="#00FA9A", fg="black", font=FONT_BOLD, width=20).pack(side="left", padx=100)
+    tk.Button(bottom, text="НАЗАД", command=login_win, bg="#FFFFFF", fg="black", font=FONT_BOLD, width=20).pack(side="right", padx=100)
+
+# =============================
+# ЗАПУСК ПРИЛОЖЕНИЯ
+# =============================
+if __name__ == "__main__":
+    root = tk.Tk()
+    root.title("Магазин НеОбуви")
+    root.configure(bg="#FFFFFF")
+    try:
+        root.iconbitmap("icon.ico")
+    except:
+        pass
+    login_win()
+    root.mainloop()

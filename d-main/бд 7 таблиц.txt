@@ -1,0 +1,85 @@
+-- 1. Создаём базу данных (если её нет)
+IF DB_ID('MagazNeObyvi') IS NULL
+    CREATE DATABASE MagazNeObyvi;
+GO
+
+USE MagazNeObyvi;
+GO
+
+-- 2. Удаляем старые таблицы (для чистого старта)
+IF OBJECT_ID('product', 'U') IS NOT NULL DROP TABLE product;
+IF OBJECT_ID('user', 'U') IS NOT NULL DROP TABLE [user];
+IF OBJECT_ID('role', 'U') IS NOT NULL DROP TABLE role;
+IF OBJECT_ID('category', 'U') IS NOT NULL DROP TABLE category;
+IF OBJECT_ID('manufacturer', 'U') IS NOT NULL DROP TABLE manufacturer;
+IF OBJECT_ID('name', 'U') IS NOT NULL DROP TABLE name;
+IF OBJECT_ID('supplier', 'U') IS NOT NULL DROP TABLE supplier;
+IF OBJECT_ID('unit', 'U') IS NOT NULL DROP TABLE unit;
+GO
+
+-- 3. Создаём справочники
+CREATE TABLE role (
+    id INT IDENTITY(1,1) PRIMARY KEY,
+    title NVARCHAR(255) NOT NULL
+);
+
+CREATE TABLE category (
+    id INT IDENTITY(1,1) PRIMARY KEY,
+    title NVARCHAR(255) NOT NULL
+);
+
+CREATE TABLE manufacturer (
+    id INT IDENTITY(1,1) PRIMARY KEY,
+    title NVARCHAR(255) NOT NULL
+);
+
+CREATE TABLE name (
+    id INT IDENTITY(1,1) PRIMARY KEY,
+    title NVARCHAR(255) NOT NULL
+);
+
+CREATE TABLE supplier (
+    id INT IDENTITY(1,1) PRIMARY KEY,
+    title NVARCHAR(255) NOT NULL
+);
+
+CREATE TABLE unit (
+    id INT IDENTITY(1,1) PRIMARY KEY,
+    title NVARCHAR(255) NOT NULL
+);
+GO
+
+-- 4. Создаём таблицу пользователей
+CREATE TABLE [user] (
+    id INT IDENTITY(1,1) PRIMARY KEY,
+    role_id INT NOT NULL FOREIGN KEY REFERENCES role(id),
+    full_name NVARCHAR(255) NOT NULL,
+    login NVARCHAR(100) NOT NULL UNIQUE,
+    password NVARCHAR(255) NOT NULL
+);
+GO
+
+-- 5. Создаём таблицу товаров
+CREATE TABLE product (
+    id INT IDENTITY(1,1) PRIMARY KEY,
+    article NVARCHAR(100) NOT NULL UNIQUE,
+    name_id INT NOT NULL FOREIGN KEY REFERENCES name(id),
+    unit_id INT NOT NULL FOREIGN KEY REFERENCES unit(id),
+    price DECIMAL(10,2) NOT NULL CHECK (price >= 0),
+    supplier_id INT NOT NULL FOREIGN KEY REFERENCES supplier(id),
+    manufacturer_id INT NOT NULL FOREIGN KEY REFERENCES manufacturer(id),
+    category_id INT NOT NULL FOREIGN KEY REFERENCES category(id),
+    discount DECIMAL(5,2) CHECK (discount BETWEEN 0 AND 100),
+    stock_quantity INT NOT NULL DEFAULT 0 CHECK (stock_quantity >= 0),
+    description NVARCHAR(MAX),
+    photo NVARCHAR(500)
+);
+GO
+
+-- 6. Добавляем одну роль: 'admin'
+INSERT INTO role (title) VALUES ('admin');
+
+-- 7. Добавляем администратора
+INSERT INTO [user] (role_id, full_name, login, password)
+VALUES (1, 'Администратор', 'admin', 'admin');
+GO
