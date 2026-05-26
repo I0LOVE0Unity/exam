@@ -1,0 +1,103 @@
+USE [MagazExam];
+GO
+
+-- Удаление существующих таблиц (в обратном порядке зависимостей)
+IF OBJECT_ID('dbo.Деталь_Заказа', 'U') IS NOT NULL DROP TABLE [dbo].[Деталь_Заказа];
+IF OBJECT_ID('dbo.Заказ', 'U') IS NOT NULL DROP TABLE [dbo].[Заказ];
+IF OBJECT_ID('dbo.Товар', 'U') IS NOT NULL DROP TABLE [dbo].[Товар];
+IF OBJECT_ID('dbo.Пункт_Выдачи', 'U') IS NOT NULL DROP TABLE [dbo].[Пункт_Выдачи];
+IF OBJECT_ID('dbo.Аккаунт', 'U') IS NOT NULL DROP TABLE [dbo].[Аккаунт];
+IF OBJECT_ID('dbo.Категория', 'U') IS NOT NULL DROP TABLE [dbo].[Категория];
+IF OBJECT_ID('dbo.Поставщик', 'U') IS NOT NULL DROP TABLE [dbo].[Поставщик];
+IF OBJECT_ID('dbo.Роль', 'U') IS NOT NULL DROP TABLE [dbo].[Роль];
+GO
+
+-- Справочники
+CREATE TABLE [dbo].[Роль] (
+    [ид_роли] INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+    [название_роли] NVARCHAR(50) NOT NULL UNIQUE
+);
+GO
+
+CREATE TABLE [dbo].[Поставщик] (
+    [ид_поставщика] INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+    [название_поставщика] NVARCHAR(100) NOT NULL UNIQUE
+);
+GO
+
+CREATE TABLE [dbo].[Категория] (
+    [ид_категории_товара] INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+    [название_категории] NVARCHAR(100) NOT NULL UNIQUE
+);
+GO
+
+CREATE TABLE [dbo].[Пункт_Выдачи] (
+    [ид_пункта_выдачи] INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+    [адрес_выдачи] NVARCHAR(500) NOT NULL
+);
+GO
+
+-- Основные таблицы с внешними ключами
+CREATE TABLE [dbo].[Аккаунт] (
+    [ид_клиента] INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+    [ид_роли] INT NULL,
+    [фио] NVARCHAR(255) NULL,
+    [логин] NVARCHAR(100) NOT NULL UNIQUE,
+    [пароль] NVARCHAR(100) NOT NULL,
+    CONSTRAINT [FK_account_role] FOREIGN KEY([ид_роли]) REFERENCES [dbo].[role]([ид_роли])
+);
+GO
+
+CREATE TABLE [dbo].[Товар] (
+    [ид_товара] INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+    [ид_категории_товара] INT NOT NULL,
+    [ид_поставщика] INT NOT NULL,
+    [артикул] NVARCHAR(50) NOT NULL UNIQUE,
+    [наименование_товара] NVARCHAR(100) NOT NULL,
+    [единица_измерения] NVARCHAR(50) NOT NULL DEFAULT N'шт.',
+    [цена] DECIMAL(10, 2) NOT NULL CHECK ([цена] >= 0),
+    [производитель] NVARCHAR(100) NOT NULL,
+    [действующая_скидка] INT NOT NULL DEFAULT 0 CHECK ([действующая_скидка] BETWEEN 0 AND 100),
+    [количество_на_складе] INT NOT NULL DEFAULT 0 CHECK ([количество_на_складе] >= 0),
+    [описание_товара] NVARCHAR(500) NULL,
+    [фото] NVARCHAR(255) NULL,
+    CONSTRAINT [FK_product_category] FOREIGN KEY([ид_категории_товара]) REFERENCES [dbo].[category]([ид_категории_товара]),
+    CONSTRAINT [FK_product_supplier] FOREIGN KEY([ид_поставщика]) REFERENCES [dbo].[supplier]([ид_поставщика])
+);
+GO
+
+CREATE TABLE [dbo].[Заказ] (
+    [ид_заказа] INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+    [ид_клиента] INT NULL,
+    [ид_пункта_выдачи] INT NULL,
+    [дата_заказа] DATE NOT NULL DEFAULT GETDATE(),
+    [дата_доставки] DATE NULL,
+    [код_получения] NVARCHAR(50) NULL,
+    [статус_заказа] NVARCHAR(50) NOT NULL DEFAULT N'Новый',
+    CONSTRAINT [FK_order_account] FOREIGN KEY([ид_клиента]) REFERENCES [dbo].[account]([ид_клиента]),
+    CONSTRAINT [FK_order_delivery] FOREIGN KEY([ид_пункта_выдачи]) REFERENCES [dbo].[delivery_point]([ид_пункта_выдачи])
+);
+GO
+
+CREATE TABLE [dbo].[Деталь_Заказа] (
+    [ид_детали_заказа] INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+    [ид_заказа] INT NOT NULL,
+    [ид_товара] INT NOT NULL,
+    [количество] INT NOT NULL CHECK ([количество] > 0),
+    CONSTRAINT [FK_detail_order] FOREIGN KEY([ид_заказа]) REFERENCES [dbo].[order_table]([ид_заказа]),
+    CONSTRAINT [FK_detail_product] FOREIGN KEY([ид_товара]) REFERENCES [dbo].[product]([ид_товара])
+);
+GO
+
+-- Заглушки для вставки данных
+-- INSERT INTO [dbo].[Роль] VALUES (...);
+-- INSERT INTO [dbo].[Поставщик] VALUES (...);
+-- INSERT INTO [dbo].[Категория] VALUES (...);
+-- INSERT INTO [dbo].[Аккаунт] VALUES (...);
+-- INSERT INTO [dbo].[Пункт_Выдачи] VALUES (...);
+-- INSERT INTO [dbo].[Товар] VALUES (...);
+-- INSERT INTO [dbo].[Заказ] VALUES (...);
+-- INSERT INTO [dbo].[Деталь_Заказа] VALUES (...);
+
+PRINT 'Структура базы данных MagazExam успешно создана. Добавьте данные вручную.';
+GO
